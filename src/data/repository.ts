@@ -62,6 +62,7 @@ export class HybridFirebaseRepository {
   private firstLaunchDone: boolean = false;
 
   constructor() {
+    this.loadFromLocalStorageCache();
     if (typeof window !== 'undefined') {
       window.addEventListener('storage', (e) => {
         if (
@@ -193,10 +194,24 @@ export class HybridFirebaseRepository {
             await this.setDocSafe(doc(db, 'users', userId, 'sources', s.id), s);
           }
 
-          this.firstLaunchDone = false;
+          const hasLocalSetup =
+            localStorage.getItem(this.getStorageKey('setupComplete')) === 'true' ||
+            localStorage.getItem('eco_onboarding_completed') === 'true' ||
+            localStorage.getItem(`eco_onboarding_dismissed_${userId}`) === 'true' ||
+            this.expenses.length > 0 ||
+            this.transactions.length > 0;
+          this.firstLaunchDone = hasLocalSetup;
         } else {
           const data = userSnap.data();
-          this.firstLaunchDone = Boolean(data?.setupComplete);
+          const hasPriorLaunch =
+            Boolean(data?.setupComplete) ||
+            localStorage.getItem(this.getStorageKey('setupComplete')) === 'true' ||
+            localStorage.getItem('eco_onboarding_completed') === 'true' ||
+            localStorage.getItem(`eco_onboarding_dismissed_${userId}`) === 'true' ||
+            this.expenses.length > 0 ||
+            this.transactions.length > 0 ||
+            this.firstLaunchDone;
+          this.firstLaunchDone = hasPriorLaunch;
           if (data?.connectionCode && data.connectionCode !== 'ECO-USER') {
             this.myConnectionCode = data.connectionCode;
             localStorage.setItem(this.getStorageKey('connectionCode'), this.myConnectionCode);
@@ -377,9 +392,30 @@ export class HybridFirebaseRepository {
             this.saveToLocalStorageCache('proposals', items);
 
             // Real-time synchronization:
-            // When sender's client observes that an outgoing proposal transitioned to 'accepted',
-            // if sender doesn't have the confirmed transaction in ledger yet, record it!
+            // 1. Generate notification for incoming pending proposals
             for (const p of items) {
+              if (p.status === 'pending' && p.senderUserId !== userId) {
+                const notifExists = this.notifications.some((n) => n.relatedId === p.id);
+                if (!notifExists) {
+                  const notif: AppNotification = {
+                    id: `notif_prop_${p.id}`,
+                    type: 'proposal_received',
+                    title: `⚡ New EcO ${p.isRepayment ? 'Repayment' : 'Debt'} Request`,
+                    body: `${p.senderName} (${p.senderCode || 'peer'}) requested to ${
+                      p.originalSenderType === 'give' ? 'lend you' : 'borrow from you'
+                    } ৳${p.amount.toLocaleString()}. Tap to accept or reject.`,
+                    createdAt: p.createdAt || Date.now(),
+                    readAt: null,
+                    expiresAt: Date.now() + 7 * 86400000,
+                    relatedType: 'proposal',
+                    relatedId: p.id
+                  };
+                  this.addNotification(notif).catch(() => {});
+                }
+              }
+
+              // 2. When sender's client observes that an outgoing proposal transitioned to 'accepted',
+              // if sender doesn't have the confirmed transaction in ledger yet, record it!
               if (p.status === 'accepted' && p.senderUserId === userId) {
                 const alreadyRecorded = this.transactions.some(
                   (t) => t.id === `tx_prop_${p.id}_sender` || t.proposalId === p.id
@@ -505,7 +541,32 @@ export class HybridFirebaseRepository {
       }
 
       const rawSetup = localStorage.getItem(this.getStorageKey('setupComplete'));
-      this.firstLaunchDone = rawSetup === 'true';
+      const globalSetup = localStorage.getItem('eco_onboarding_completed');
+      this.firstLaunchDone =
+        rawSetup === 'true' ||
+        globalSetup === 'true' ||
+        this.expenses.length > 0 ||
+        this.transactions.length > 0;
+
+      // Cross-tab & multi-tab proposal sync
+      try {
+        const sharedProps: EcOProposal[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('eco_shared_proposals_')) {
+            try {
+              const item = JSON.parse(localStorage.getItem(k) || '');
+              if (item && item.id) sharedProps.push(item);
+            } catch {}
+          }
+        }
+        if (sharedProps.length > 0) {
+          const map = new Map<string, EcOProposal>();
+          this.proposals.forEach((p) => map.set(p.id, p));
+          sharedProps.forEach((p) => map.set(p.id, p));
+          this.proposals = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        }
+      } catch {}
     } catch (e) {
       console.warn('[EcO Cache] Failed to load local cache:', e);
     }
@@ -522,12 +583,42 @@ export class HybridFirebaseRepository {
   // --- Getters & Synchronous Accessors ---
 
   isFirstLaunchDone(): boolean {
-    return this.firstLaunchDone;
+    if (this.firstLaunchDone) return true;
+    if (this.settings?.setupComplete) return true;
+    try {
+      if (typeof window !== 'undefined') {
+        const localSetup = localStorage.getItem(this.getStorageKey('setupComplete'));
+        if (localSetup === 'true' || localSetup === '"true"') return true;
+        const globalSetup = localStorage.getItem('eco_onboarding_completed');
+        if (globalSetup === 'true') return true;
+        if (this.activeUserId) {
+          const userDismissed = localStorage.getItem(`eco_onboarding_dismissed_${this.activeUserId}`);
+          if (userDismissed === 'true') return true;
+        }
+      }
+    } catch {}
+    if (
+      this.expenses.length > 0 ||
+      this.earnings.length > 0 ||
+      this.transfers.length > 0 ||
+      this.transactions.length > 0
+    ) {
+      return true;
+    }
+    return false;
   }
 
   async setFirstLaunchDone(val = true): Promise<void> {
     this.firstLaunchDone = val;
     this.saveToLocalStorageCache('setupComplete', val);
+    try {
+      if (val && typeof window !== 'undefined') {
+        localStorage.setItem('eco_onboarding_completed', 'true');
+        if (this.activeUserId) {
+          localStorage.setItem(`eco_onboarding_dismissed_${this.activeUserId}`, 'true');
+        }
+      }
+    } catch {}
     if (this.settings) {
       this.settings.setupComplete = val;
     }
