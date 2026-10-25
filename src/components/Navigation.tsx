@@ -11,7 +11,8 @@ import {
   MessageSquareHeart,
   Download,
   Smartphone,
-  LogOut
+  LogOut,
+  Bell
 } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 import { Avatar } from './ui/Avatar';
@@ -23,6 +24,7 @@ interface NavigationProps {
   currentTab: NavTab;
   onSelectTab: (tab: NavTab) => void;
   onOpenAddModal: () => void;
+  onOpenNotifications?: () => void;
   onOpenFeedback: () => void;
   onOpenSupport: () => void;
   onSignOut?: () => void;
@@ -36,10 +38,12 @@ export const Navigation: React.FC<NavigationProps> = ({
   currentTab,
   onSelectTab,
   onOpenAddModal,
+  onOpenNotifications,
   onOpenFeedback,
   onOpenSupport,
   onSignOut,
   user,
+  unreadNotificationCount = 0,
   isMobileDrawerOpen = false,
   onCloseMobileDrawer
 }) => {
@@ -153,8 +157,26 @@ export const Navigation: React.FC<NavigationProps> = ({
           </div>
         )}
 
-        {/* Secondary Actions: Install Web App & Feedback ("অ্যাপ রে গালাবো") */}
+        {/* Secondary Actions: Notifications, Install Web App & Feedback ("অ্যাপ রে গালাবো") */}
         <div className="px-3 py-2 border-t border-[#3D4943]/30 space-y-1">
+          {onOpenNotifications && (
+            <button
+              type="button"
+              onClick={onOpenNotifications}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors text-left text-[#BCCAC1] hover:text-[#73E3B4] hover:bg-[#1A1C20] group cursor-pointer"
+              title="Open notifications and pending proposals"
+            >
+              <div className="flex items-center gap-3">
+                <Bell className="w-4 h-4 text-[#73E3B4] group-hover:scale-105 transition-transform" />
+                <span>Inbox & Requests</span>
+              </div>
+              {unreadNotificationCount > 0 && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#55C79A] text-[#003826] font-mono font-bold text-[10px] flex items-center justify-center">
+                  {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                </span>
+              )}
+            </button>
+          )}
           {!isInstalled && (
             <button
               type="button"
@@ -312,6 +334,27 @@ export const Navigation: React.FC<NavigationProps> = ({
                 >
                   <Download className="w-4 h-4 text-[#73E3B4] group-hover:scale-105 transition-transform" />
                   <span>Install Web App</span>
+                </button>
+              )}
+
+              {onOpenNotifications && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCloseMobileDrawer?.();
+                    onOpenNotifications();
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-colors text-left text-[#BCCAC1] hover:text-[#73E3B4] hover:bg-[#1A1C20] group cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <Bell className="w-4 h-4 text-[#73E3B4] group-hover:scale-105 transition-transform" />
+                    <span>Inbox & Requests</span>
+                  </div>
+                  {unreadNotificationCount > 0 && (
+                    <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#55C79A] text-[#003826] font-mono font-bold text-[10px] flex items-center justify-center">
+                      {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                    </span>
+                  )}
                 </button>
               )}
 
