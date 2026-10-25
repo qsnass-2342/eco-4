@@ -79,11 +79,13 @@ export const Header: React.FC<HeaderProps> = ({
           onClick={onOpenNotifications}
           className="relative p-2 min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg hover:bg-[#1A1C20] text-[#BCCAC1] hover:text-[#E2E2E8] transition-colors cursor-pointer"
           aria-label="Notifications"
-          title="Notification Inbox"
+          title={`Notification & Requests Inbox ${unreadCount > 0 ? `(${unreadCount} pending)` : ''}`}
         >
           <Bell className="w-4 h-4" />
           {unreadCount > 0 && (
-            <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#73E3B4]" />
+            <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#55C79A] text-[#003826] font-mono font-bold text-[10px] flex items-center justify-center shadow-md animate-pulse">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
           )}
         </button>
 
