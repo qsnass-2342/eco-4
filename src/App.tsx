@@ -337,6 +337,24 @@ export default function App() {
     });
   }, [expenses, recurringExpenses, earnings, transfers, transactions, people, paymentMethods]);
 
+  // Pending incoming proposals requiring recipient confirmation (unconditionally declared before any early returns)
+  const pendingIncomingProposals = useMemo(() => {
+    return proposals.filter((p) => {
+      if (p.status !== 'pending' && p.status !== 'disputed') return false;
+      const uid = user?.uid;
+      const isRecipient =
+        (uid && p.recipientUserId === uid) ||
+        (myConnectionCode && p.recipientCode === myConnectionCode) ||
+        (uid && p.senderUserId !== uid);
+      return isRecipient;
+    });
+  }, [proposals, user?.uid, myConnectionCode]);
+
+  const unreadCount = useMemo(() => {
+    const unreadNotifs = notifications.filter((n) => !n.readAt).length;
+    return unreadNotifs + pendingIncomingProposals.length;
+  }, [notifications, pendingIncomingProposals]);
+
   // Handler: Delete activity from unified list
   const handleDeleteActivity = (item: UnifiedActivityItem) => {
     if (item.activityType === 'expense') {
@@ -543,24 +561,6 @@ export default function App() {
       </>
     );
   }
-
-  // Pending incoming proposals requiring recipient confirmation
-  const pendingIncomingProposals = useMemo(() => {
-    return proposals.filter((p) => {
-      if (p.status !== 'pending' && p.status !== 'disputed') return false;
-      const uid = user?.uid;
-      const isRecipient =
-        (uid && p.recipientUserId === uid) ||
-        (myConnectionCode && p.recipientCode === myConnectionCode) ||
-        (uid && p.senderUserId !== uid);
-      return isRecipient;
-    });
-  }, [proposals, user?.uid, myConnectionCode]);
-
-  const unreadCount = useMemo(() => {
-    const unreadNotifs = notifications.filter((n) => !n.readAt).length;
-    return unreadNotifs + pendingIncomingProposals.length;
-  }, [notifications, pendingIncomingProposals]);
 
   return (
     <div className="min-h-screen bg-[#111317] text-[#E2E2E8] flex flex-col font-sans">
