@@ -1,5 +1,5 @@
 // EcO Smart Ledger Service Worker
-const CACHE_NAME = 'eco-ledger-v1';
+const CACHE_NAME = 'eco-ledger-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -31,15 +31,23 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
+  // Ignore chrome-extension://, moz-extension://, and other non-http(s) schemes
+  if (!event.request.url.startsWith('http://') && !event.request.url.startsWith('https://')) {
+    return;
+  }
+
   // Network first with fallback to cache for offline availability
   event.respondWith(
     fetch(event.request)
       .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+        if (networkResponse && networkResponse.status === 200 && (networkResponse.type === 'basic' || networkResponse.type === 'cors')) {
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
+            if (event.request.url.startsWith('http://') || event.request.url.startsWith('https://')) {
+              cache.put(event.request, responseToCache).catch(() => {});
+            }
+          }).catch(() => {});
         }
         return networkResponse;
       })
