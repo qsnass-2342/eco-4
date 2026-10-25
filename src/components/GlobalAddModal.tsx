@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   ArrowLeft,
@@ -9,14 +9,17 @@ import {
   HandCoins,
   Receipt,
   Plus,
-  Info
+  Info,
+  Zap,
+  Link2
 } from 'lucide-react';
 import {
   PaymentMethod,
   PersonRecord,
   IncomeSource,
   ExpenseType,
-  PeerFeeTreatment
+  PeerFeeTreatment,
+  EcOConnection
 } from '../domain/types';
 import { getTodayDateString, calculateRecurringEndDate } from '../domain/dates';
 import { calculateTransferCharge } from '../domain/calculations';
@@ -30,6 +33,7 @@ interface GlobalAddModalProps {
   onClose: () => void;
   paymentMethods: PaymentMethod[];
   people: PersonRecord[];
+  connections?: EcOConnection[];
   sources: IncomeSource[];
   categories: string[];
   tags: string[];
@@ -83,6 +87,16 @@ interface GlobalAddModalProps {
     chargeAmount?: number;
     feeTreatment?: PeerFeeTreatment;
   }) => void;
+  onSaveConnectedProposal?: (data: {
+    recipientCode: string;
+    recipientName: string;
+    type: 'give' | 'take';
+    amount: number;
+    date: string;
+    note?: string;
+    isRepayment?: boolean;
+    payMethodId?: string;
+  }) => void;
   onCreatePersonInline: (name: string, phone?: string) => string; // returns new personId
   onCreateSourceInline: (name: string) => void;
   onCreateTagInline: (tag: string) => void;
@@ -94,6 +108,7 @@ export const GlobalAddModal: React.FC<GlobalAddModalProps> = ({
   onClose,
   paymentMethods,
   people,
+  connections = [],
   sources,
   categories,
   tags,
@@ -103,6 +118,7 @@ export const GlobalAddModal: React.FC<GlobalAddModalProps> = ({
   onSaveEarning,
   onSaveTransfer,
   onSavePeerTransaction,
+  onSaveConnectedProposal,
   onCreatePersonInline,
   onCreateSourceInline,
   onCreateTagInline
@@ -137,13 +153,67 @@ export const GlobalAddModal: React.FC<GlobalAddModalProps> = ({
   const [chargeRate, setChargeRate] = useState<number>(1.85);
   const [transferPreset, setTransferPreset] = useState<'none' | 'bkash' | 'bkash_priyo' | 'nagad' | 'custom'>('none');
 
+  // Combine local people with any connected EcO contacts from connections
+  const combinedPeopleList = useMemo(() => {
+    const list = [...people];
+    (connections || []).forEach((conn) => {
+      const alreadyInList = list.some(
+        (p) => (p.connectionCode && p.connectionCode === conn.peerCode) ||
+               (conn.peerUserId && p.connectedUserId === conn.peerUserId) ||
+               p.name.toLowerCase() === conn.peerName.toLowerCase()
+      );
+      if (!alreadyInList) {
+        list.push({
+          id: `person_conn_${conn.id}`,
+          name: conn.peerName,
+          isConnected: true,
+          connectionCode: conn.peerCode,
+          connectedUserId: conn.peerUserId,
+          createdAt: new Date(conn.createdAt || Date.now()).toISOString()
+        });
+      }
+    });
+    return list;
+  }, [people, connections]);
+
+  const getPersonConnectedInfo = (p?: PersonRecord | null) => {
+    if (!p) return { isConnected: false, code: '' };
+    if (p.isConnected && p.connectionCode) {
+      return { isConnected: true, code: p.connectionCode };
+    }
+    const matchingConn = (connections || []).find(
+      (c) => (p.connectionCode && c.peerCode === p.connectionCode) ||
+             (p.connectedUserId && c.peerUserId === p.connectedUserId) ||
+             (c.status === 'connected' && c.peerName.toLowerCase() === p.name.toLowerCase())
+    );
+    if (matchingConn) {
+      return { isConnected: true, code: matchingConn.peerCode };
+    }
+    return { isConnected: false, code: '' };
+  };
+
   // Peer transaction specific
-  const [personId, setPersonId] = useState<string>(people[0]?.id || '');
+  const [personId, setPersonId] = useState<string>(() => people[0]?.id || (connections[0] ? `person_conn_${connections[0].id}` : ''));
   const [tag, setTag] = useState<string>(tags[0] || 'Personal');
   const [peerApplyCharge, setPeerApplyCharge] = useState<boolean>(false);
   const [peerChargeRate, setPeerChargeRate] = useState<number>(1.85);
   const [peerPreset, setPeerPreset] = useState<'none' | 'bkash' | 'bkash_priyo' | 'nagad' | 'custom'>('none');
   const [peerFeeTreatment, setPeerFeeTreatment] = useState<PeerFeeTreatment>('separate');
+
+  const selectedPersonObj = useMemo(() => {
+    return combinedPeopleList.find((p) => p.id === personId) || combinedPeopleList[0] || null;
+  }, [combinedPeopleList, personId]);
+
+  const selectedPersonConnInfo = useMemo(() => {
+    return getPersonConnectedInfo(selectedPersonObj);
+  }, [selectedPersonObj, connections]);
+
+  // Synchronize personId if empty and combined list becomes available
+  useEffect(() => {
+    if (!personId && combinedPeopleList.length > 0) {
+      setPersonId(combinedPeopleList[0].id);
+    }
+  }, [combinedPeopleList, personId]);
 
   // Inline creation mini-dialogs
   const [showInlinePerson, setShowInlinePerson] = useState<boolean>(false);
@@ -182,11 +252,11 @@ export const GlobalAddModal: React.FC<GlobalAddModalProps> = ({
         const secondMethod = paymentMethods.find((m) => m.id !== paymentMethods[0].id) || paymentMethods[0];
         setToMethodId(secondMethod.id);
       }
-      if (people.length > 0) {
-        setPersonId(people[0].id);
+      if (combinedPeopleList.length > 0 && (!personId || !combinedPeopleList.some((p) => p.id === personId))) {
+        setPersonId(combinedPeopleList[0].id);
       }
     }
-  }, [isOpen, initialKind, paymentMethods, people]);
+  }, [isOpen, initialKind, paymentMethods, combinedPeopleList]);
 
   const handleClose = () => {
     if (isSubmitting) return;
@@ -292,20 +362,45 @@ export const GlobalAddModal: React.FC<GlobalAddModalProps> = ({
           date
         });
       } else if (selectedKind === 'give' || selectedKind === 'take') {
-        const feeAmount = peerApplyCharge && peerChargeRate > 0 ? (parsedAmount * peerChargeRate) / 100 : 0;
-        onSavePeerTransaction({
-          personId,
-          type: selectedKind,
-          amount: parsedAmount,
-          payMethodId,
-          tag,
-          description: description.trim(),
-          date,
-          chargeApplied: peerApplyCharge,
-          chargeRate: peerApplyCharge ? peerChargeRate : 0,
-          chargeAmount: feeAmount,
-          feeTreatment: peerApplyCharge ? peerFeeTreatment : 'none'
-        });
+        if (selectedPersonConnInfo.isConnected && selectedPersonConnInfo.code) {
+          if (onSaveConnectedProposal) {
+            onSaveConnectedProposal({
+              recipientCode: selectedPersonConnInfo.code,
+              recipientName: selectedPersonObj?.name || 'Contact',
+              type: selectedKind,
+              amount: parsedAmount,
+              date,
+              note: description.trim() || undefined,
+              isRepayment: tag.toLowerCase() === 'repayment',
+              payMethodId
+            });
+          } else {
+            onSavePeerTransaction({
+              personId: selectedPersonObj?.id || personId,
+              type: selectedKind,
+              amount: parsedAmount,
+              payMethodId,
+              tag,
+              description: description.trim(),
+              date
+            });
+          }
+        } else {
+          const feeAmount = peerApplyCharge && peerChargeRate > 0 ? (parsedAmount * peerChargeRate) / 100 : 0;
+          onSavePeerTransaction({
+            personId,
+            type: selectedKind,
+            amount: parsedAmount,
+            payMethodId,
+            tag,
+            description: description.trim(),
+            date,
+            chargeApplied: peerApplyCharge,
+            chargeRate: peerApplyCharge ? peerChargeRate : 0,
+            chargeAmount: feeAmount,
+            feeTreatment: peerApplyCharge ? peerFeeTreatment : 'none'
+          });
+        }
       }
 
       onClose();
@@ -720,10 +815,39 @@ export const GlobalAddModal: React.FC<GlobalAddModalProps> = ({
                       onChange={(e) => setPersonId(e.target.value)}
                       className="w-full px-3 py-2 rounded bg-[#0C0E12] border border-[#3D4943]/50 text-[#E2E2E8] text-xs focus:outline-none focus:border-[#73E3B4]"
                     >
-                      {people.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
+                      {combinedPeopleList.map((p) => {
+                        const connInfo = getPersonConnectedInfo(p);
+                        return (
+                          <option key={p.id} value={p.id}>
+                            {p.name} {connInfo.isConnected ? `⚡ [EcO Connected • ${connInfo.code}]` : ''}
+                          </option>
+                        );
+                      })}
                     </select>
+
+                    {/* Prominent Connected EcO Account indicator */}
+                    {selectedPersonConnInfo.isConnected && (
+                      <div className="mt-2.5 p-3 rounded-xl bg-[#0C0E12] border border-[#73E3B4]/50 flex items-start gap-3 animate-in fade-in duration-150">
+                        <div className="w-7 h-7 rounded-lg bg-[#73E3B4]/15 border border-[#73E3B4]/30 flex items-center justify-center text-[#73E3B4] shrink-0 mt-0.5 shadow-sm">
+                          <Zap className="w-4 h-4 fill-[#73E3B4]/20 stroke-[2.2]" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-xs text-[#E2E2E8]">{selectedPersonObj?.name}</span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#73E3B4]/20 text-[#73E3B4] border border-[#73E3B4]/30 flex items-center gap-1">
+                              <Zap className="w-2.5 h-2.5" />
+                              EcO Connected Contact
+                            </span>
+                            <span className="text-[10px] font-mono text-[#87948C]">
+                              {selectedPersonConnInfo.code}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[#BCCAC1] mt-1 leading-relaxed">
+                            Two-party synchronized account. Adding this will send an official EcO proposal directly to {selectedPersonObj?.name} for confirmation.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div>
@@ -1081,35 +1205,59 @@ export const GlobalAddModal: React.FC<GlobalAddModalProps> = ({
 
               {/* Plain language semantic confirmation */}
               {(selectedKind === 'give' || selectedKind === 'take') && (
-                <div className="p-2.5 rounded bg-[#1E2024] border border-[#3D4943]/30 text-[11px] flex items-start gap-2 text-[#BCCAC1]">
-                  <Info className="w-4 h-4 text-[#73E3B4] shrink-0 mt-0.5" />
-                  <div>
-                    {selectedKind === 'give' ? (
-                      <span>
-                        You are recording that you <strong>lent</strong> money.{' '}
-                        {people.find((p) => p.id === personId)?.name || 'This person'} will owe you{' '}
-                        <strong className="text-[#73E3B4]">
-                          {formatTaka(
-                            peerApplyCharge && peerFeeTreatment === 'included'
-                              ? (parseFloat(amountStr) || 0) + ((parseFloat(amountStr) || 0) * peerChargeRate) / 100
-                              : parseFloat(amountStr) || 0
-                          )}
-                        </strong>.
-                      </span>
-                    ) : (
-                      <span>
-                        You are recording that you <strong>borrowed</strong> money. You will owe{' '}
-                        {people.find((p) => p.id === personId)?.name || 'this person'}{' '}
-                        <strong className="text-[#FFB4AB]">
-                          {formatTaka(
-                            peerApplyCharge && peerFeeTreatment === 'included'
-                              ? (parseFloat(amountStr) || 0) + ((parseFloat(amountStr) || 0) * peerChargeRate) / 100
-                              : parseFloat(amountStr) || 0
-                          )}
-                        </strong>.
-                      </span>
-                    )}
-                  </div>
+                <div className="p-3 rounded-xl bg-[#1E2024] border border-[#3D4943]/40 text-xs space-y-2 text-[#BCCAC1]">
+                  {selectedPersonConnInfo.isConnected ? (
+                    <div className="flex items-start gap-2.5">
+                      <Zap className="w-4 h-4 text-[#73E3B4] shrink-0 mt-0.5 fill-[#73E3B4]/20" />
+                      <div>
+                        <div className="font-semibold text-[#E2E2E8]">
+                          Two-Party EcO Connected Synchronization
+                        </div>
+                        <div className="text-[11px] text-[#BCCAC1] mt-0.5 leading-relaxed">
+                          You are submitting an official proposal to{' '}
+                          <span className="text-[#73E3B4] font-medium">
+                            {selectedPersonObj?.name} ({selectedPersonConnInfo.code})
+                          </span>{' '}
+                          to {selectedKind === 'give' ? 'lend' : 'borrow'}{' '}
+                          <strong className="text-[#E2E2E8]">
+                            ৳{formatTaka(parseFloat(amountStr) || 0)}
+                          </strong>
+                          . Once they confirm via their notification bar, this entry will automatically record in both ledgers.
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-2">
+                      <Info className="w-4 h-4 text-[#73E3B4] shrink-0 mt-0.5" />
+                      <div>
+                        {selectedKind === 'give' ? (
+                          <span>
+                            You are recording that you <strong>lent</strong> money.{' '}
+                            {selectedPersonObj?.name || 'This person'} will owe you{' '}
+                            <strong className="text-[#73E3B4]">
+                              {formatTaka(
+                                peerApplyCharge && peerFeeTreatment === 'included'
+                                  ? (parseFloat(amountStr) || 0) + ((parseFloat(amountStr) || 0) * peerChargeRate) / 100
+                                  : parseFloat(amountStr) || 0
+                              )}
+                            </strong>.
+                          </span>
+                        ) : (
+                          <span>
+                            You are recording that you <strong>borrowed</strong> money. You will owe{' '}
+                            {selectedPersonObj?.name || 'this person'}{' '}
+                            <strong className="text-[#FFB4AB]">
+                              {formatTaka(
+                                peerApplyCharge && peerFeeTreatment === 'included'
+                                  ? (parseFloat(amountStr) || 0) + ((parseFloat(amountStr) || 0) * peerChargeRate) / 100
+                                  : parseFloat(amountStr) || 0
+                              )}
+                            </strong>.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1151,9 +1299,18 @@ export const GlobalAddModal: React.FC<GlobalAddModalProps> = ({
               type="button"
               disabled={isSubmitting}
               onClick={handleSubmit}
-              className="px-5 py-2 rounded bg-[#55C79A] hover:bg-[#73E3B4] disabled:opacity-50 text-xs font-semibold text-[#003826] transition-all shadow-sm active:scale-[0.98]"
+              className="px-5 py-2 rounded bg-[#55C79A] hover:bg-[#73E3B4] disabled:opacity-50 text-xs font-semibold text-[#003826] transition-all shadow-sm active:scale-[0.98] flex items-center gap-1.5 cursor-pointer"
             >
-              {isSubmitting ? 'Saving...' : 'Confirm & Save'}
+              {isSubmitting ? (
+                'Saving...'
+              ) : (selectedKind === 'give' || selectedKind === 'take') && selectedPersonConnInfo.isConnected ? (
+                <>
+                  <Zap className="w-3.5 h-3.5 fill-[#003826]" />
+                  <span>Send EcO Proposal</span>
+                </>
+              ) : (
+                'Confirm & Save'
+              )}
             </button>
           ) : null}
         </div>
