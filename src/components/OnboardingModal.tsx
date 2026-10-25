@@ -179,7 +179,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
       onClick={(e) => {
-        if (canDismiss && onDismiss && e.target === e.currentTarget) {
+        if (onDismiss && e.target === e.currentTarget) {
           onDismiss();
         }
       }}
@@ -189,12 +189,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       <div className="w-full max-w-lg bg-[#1A1C20] border border-[#3D4943]/70 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="relative px-6 py-5 border-b border-[#3D4943]/40 bg-[#1E2024] text-center">
-          {canDismiss && onDismiss && (
+          {onDismiss && (
             <button
               type="button"
               onClick={onDismiss}
               className="absolute right-4 top-4 p-1.5 rounded text-[#87948C] hover:text-[#E2E2E8] hover:bg-[#282A2E] transition-colors cursor-pointer"
               aria-label="Close"
+              title="Close and enter ledger"
             >
               <X className="w-4 h-4" />
             </button>
@@ -276,6 +277,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   type="button"
                   onClick={() => {
                     if (onSkip) onSkip();
+                    else if (onDismiss) onDismiss();
                     else handleFinishNewUser();
                   }}
                   className="text-xs text-[#87948C] hover:text-[#E2E2E8] hover:underline cursor-pointer"
