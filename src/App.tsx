@@ -84,7 +84,7 @@ export default function App() {
   const [initialAddKind, setInitialAddKind] = useState<ActivityKind | undefined>(undefined);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState<boolean>(false);
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState<boolean>(false);
-  const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(!repository.isFirstLaunchDone());
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState<boolean>(false);
   const [isSupportOpen, setIsSupportOpen] = useState<boolean>(false);
 
@@ -163,7 +163,9 @@ export default function App() {
     if (user?.uid) {
       repository.initForUser(user.uid, user.displayName || undefined, user.email || undefined).then(() => {
         refreshFromRepository();
-        setIsOnboardingOpen(!repository.isFirstLaunchDone());
+        if (!repository.isFirstLaunchDone()) {
+          setIsOnboardingOpen(true);
+        }
       });
     }
   }, [user?.uid, user?.displayName, user?.email, refreshFromRepository]);
@@ -455,9 +457,15 @@ export default function App() {
   // Handler: Complete onboarding via eco-backup import
   const handleCompleteImport = async (backup: EcoBackupV1): Promise<{ importedCount: number; skippedCount: number }> => {
     const res = await repository.importBackup(backup);
+    await repository.setFirstLaunchDone(true);
     setIsOnboardingOpen(false);
     showToast(`Backup restored: ${res.importedCount} records imported${res.skippedCount > 0 ? ` (${res.skippedCount} duplicates skipped)` : ''}.`);
     return res;
+  };
+
+  const handleDismissOnboarding = async () => {
+    await repository.setFirstLaunchDone(true);
+    setIsOnboardingOpen(false);
   };
 
   // Export backup JSON trigger
@@ -536,7 +544,23 @@ export default function App() {
     );
   }
 
-  const unreadCount = notifications.filter((n) => !n.readAt).length;
+  // Pending incoming proposals requiring recipient confirmation
+  const pendingIncomingProposals = useMemo(() => {
+    return proposals.filter((p) => {
+      if (p.status !== 'pending' && p.status !== 'disputed') return false;
+      const uid = user?.uid;
+      const isRecipient =
+        (uid && p.recipientUserId === uid) ||
+        (myConnectionCode && p.recipientCode === myConnectionCode) ||
+        (uid && p.senderUserId !== uid);
+      return isRecipient;
+    });
+  }, [proposals, user?.uid, myConnectionCode]);
+
+  const unreadCount = useMemo(() => {
+    const unreadNotifs = notifications.filter((n) => !n.readAt).length;
+    return unreadNotifs + pendingIncomingProposals.length;
+  }, [notifications, pendingIncomingProposals]);
 
   return (
     <div className="min-h-screen bg-[#111317] text-[#E2E2E8] flex flex-col font-sans">
@@ -556,6 +580,7 @@ export default function App() {
           setInitialAddKind(undefined);
           setIsAddModalOpen(true);
         }}
+        onOpenNotifications={() => setIsNotificationsOpen(true)}
         onOpenFeedback={() => setIsFeedbackOpen(true)}
         onOpenSupport={() => setIsSupportOpen(true)}
         onSignOut={handleSignOut}
@@ -826,6 +851,7 @@ export default function App() {
         }}
         paymentMethods={paymentMethods}
         people={people}
+        connections={connections}
         sources={sources}
         categories={settings.categories}
         tags={settings.tags}
@@ -873,6 +899,23 @@ export default function App() {
           });
           showToast(`Debt transaction recorded (${data.type === 'give' ? 'Lent' : 'Borrowed'}).`);
         }}
+        onSaveConnectedProposal={async (data) => {
+          const res = await repository.createProposal({
+            recipientCode: data.recipientCode,
+            recipientName: data.recipientName,
+            type: data.type,
+            amount: data.amount,
+            date: data.date,
+            note: data.note,
+            isRepayment: data.isRepayment,
+            payMethodId: data.payMethodId
+          });
+          if (res.success) {
+            showToast(`${data.isRepayment ? 'Repayment proposal' : 'EcO proposal'} of ৳${data.amount} sent to ${data.recipientName} for confirmation!`);
+          } else {
+            showToast(res.error || 'Failed to send proposal.');
+          }
+        }}
         onCreatePersonInline={(name, phone) => {
           const newPerson: PersonRecord = {
             id: `person_${Date.now()}`,
@@ -907,21 +950,47 @@ export default function App() {
       {/* First-Launch Onboarding Modal with 1-Click Sample Fixture */}
       <OnboardingModal
         isOpen={isOnboardingOpen}
-        canDismiss={firstLaunchDone}
-        onDismiss={() => setIsOnboardingOpen(false)}
-        onSkip={() => setIsOnboardingOpen(false)}
+        canDismiss={true}
+        onDismiss={handleDismissOnboarding}
+        onSkip={handleDismissOnboarding}
         initialMode={firstLaunchDone ? 'import_flow' : 'choose'}
         onCompleteNewUser={handleCompleteNewUser}
         onCompleteImport={handleCompleteImport}
       />
 
-      {/* Notification Inbox Modal (7-Day TTL) */}
+      {/* Notification Inbox Modal (7-Day TTL + Interactive EcO Proposals) */}
       <NotificationModal
         isOpen={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
         notifications={notifications}
+        incomingProposals={pendingIncomingProposals}
+        paymentMethods={paymentMethods}
         onMarkRead={(id) => repository.markNotificationRead(id)}
         onMarkAllRead={() => repository.markAllNotificationsRead()}
+        onAcceptProposal={async (proposalId, payMethodId) => {
+          const res = await repository.acceptProposal(proposalId, payMethodId);
+          if (res.success) {
+            showToast('Proposal confirmed & posted to your shared ledger!');
+          } else {
+            showToast(res.error || 'Failed to accept proposal.');
+          }
+        }}
+        onRejectProposal={async (proposalId) => {
+          await repository.rejectProposal(proposalId);
+          showToast('Proposal rejected.');
+        }}
+        onDisputeProposal={async (proposalId, reason) => {
+          const res = await repository.disputeProposal(proposalId, reason);
+          if (res.success) {
+            showToast('Proposal marked as disputed. No changes were made to confirmed balances.');
+          } else {
+            showToast(res.error || 'Failed to dispute proposal.');
+          }
+        }}
+        onNavigateToConnections={() => {
+          setIsNotificationsOpen(false);
+          setCurrentTab('people');
+        }}
       />
 
       {/* "অ্যাপ রে গালাবো" Feedback Modal */}
